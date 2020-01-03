@@ -7,12 +7,12 @@ This project includes the following files and folders:
 - src - Code for the application's Lambda function.
 - events - Invocation events that you can use to invoke the function.
 - \_\_tests__ - Unit tests for the application code.
-- template.yml - A SAM template that defines the application's AWS resources.
+- cdk - The CDK model that defines the application's AWS resources.
 - buildspec.yml -  A build specification file that tells AWS CodeBuild how to create a deployment package for the function.
 
 Your Lambda application includes two AWS CloudFormation stacks. The first stack creates the pipeline that builds and deploys your application.
 
-The pipeline creates a second stack that contains your application's resources, including Lambda functions, and an Amazon SQS queue. These resources are defined in the `template.yml` file in this project. You can update the template to add AWS resources through the same deployment process that updates your application code. You can view those resources in the **Resources** section of the application overview in the Lambda console.
+The pipeline creates a second stack that contains your application's resources, including Lambda functions, and CloudWatch Events scheduled event. These resources are defined in the `cdk/lib/cdk-stack.ts` file in this project. You can update the CDK model to add AWS resources through the same deployment process that updates your application code. You can view those resources in the **Resources** section of the application overview in the Lambda console.
 
 For a full list of possible operations, see the [AWS Lambda Applications documentation](https://docs.aws.amazon.com/lambda/latest/dg/deploying-lambda-apps.html).
 
@@ -29,14 +29,14 @@ For a full list of possible operations, see the [AWS Lambda Applications documen
 
 ## Add a resource to your application
 
-The application template uses the AWS Serverless Application Model (AWS SAM) to define application resources. AWS SAM is an extension of AWS CloudFormation with a simpler syntax for configuring common serverless application resources, such as functions, triggers, and APIs. For resources that aren't included in the [AWS SAM specification](https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md), you can use the standard [AWS CloudFormation resource types](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html).
+The application template uses the AWS Cloud Development Kit (AWS CDK) to define application resources. AWS CDK is an open source software development framework to model and provision your cloud application resources using familiar programming languages. AWS CDK provides a library of constructs that cover many AWS services and features, enabling you to define your applications' infrastructure at a high level. AWS CDK also provides CFN Resources, which map 1:1 with base-level AWS CloudFormation resources, and provide a way to define CloudFormation with a programming language.
 
-Update `template.yml` to add a dead-letter queue to your application. In the **Resources** section, add a resource named **MyQueue** with the type **AWS::SQS::Queue**.
+Update `cdk/lib/cdk-stack.ts` to add a dead-letter queue to your application. In the `CdkStack` class import `@aws-cdk/aws-sqs` module, and in the class constructor, add a resource named **MyQueue** with the type **@aws-cdk/aws-sqs.Queue**.
 
-```
-Resources:
-  MyQueue:
-    Type: AWS::SQS::Queue
+```typescript
+import { Queue } from '@aws-cdk/aws-sqs'
+...
+const dlq = new Queue(this, 'MyQueue', { });
 ```
 
 The dead-letter queue is a location for Lambda to send events that could not be processed. It's only used if you invoke your function asynchronously, but it's useful here to show how you can modify your application's resources and function configuration.
@@ -73,33 +73,32 @@ In order for the function to use the queue that you added in the previous step, 
 
 Now you can grant the function permission to access the queue and configure the dead-letter queue setting.
 
-In the function's properties in `template.yml`, add the **DeadLetterQueue** configuration. Under Policies, add **SQSSendMessagePolicy**. **SQSSendMessagePolicy** is a [policy template](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-policy-templates.html) that grants the function permission to send messages to a queue.
+In the function's properties in `cdk/lib/cdk-stack.ts`, add the **deadLetterQueue** configuration. Allow the Lambda function to send messages to a queue with the `grantSendMessages` [method](https://docs.aws.amazon.com/cdk/api/latest/docs/@aws-cdk_aws-sqs.IQueue.html#grant-wbr-send-wbr-messagesgrantee).
 
-```
-Resources:
-  MyQueue:
-    Type: AWS::SQS::Queue
-  sqsPayloadLoggerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: src/handlers/sqs-payload-logger.sqsPayloadLoggerHandler
-      Runtime: nodejs10.x
-      Description: A Lambda function that logs the payload of messages sent to an associated SQS queue.
-      MemorySize: 128
-      Timeout: 25
-      DeadLetterQueue:
-        Type: SQS
-        TargetArn: !GetAtt MyQueue.Arn
-      Policies:
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt MyQueue.QueueName
-        - AWSLambdaBasicExecutionRole
-      Events:
-        SimpleQueueEvent:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt SimpleQueue.Arn
+```typescript
+// This is a Lambda function config associated with the source code: s3-json-logger.js
+const sqsPayloadLoggerFunction = new lambda.Function(this, "sqsPayloadLoggerFunction", {
+  handler: "index.sqsPayloadLoggerHandler",
+  runtime: lambda.Runtime.NODEJS_10_X,
+  description: "A Lambda function that logs the payload of messages sent to an associated SQS queue.",
+  memorySize: 128,
+  // Using inline code as a workaround as local assets are not supported yet, see https://github.com/aws/aws-cdk/issues/1312
+  //code: lambda.Code.asset("../src/handlers"),
+  code: lambda.Code.inline(this.localAsset(path.join(__dirname, "../../src/handlers/sqs-payload-logger.js"))),
+  timeout: cdk.Duration.seconds(25) //Chosen to be less than the default SQS Visibility Timeout of 30 seconds
+  deadLetterQueue: dlq
+});
+// Add event source
+new Rule(this, 'SimpleCWEEvent', {
+ schedule: Schedule.expression('cron(0 * * * ? *)'),
+ targets: [new LambdaFunction(scheduledEventLoggerFunction)],
+});
+// Give Read Permissions to the SQS queue
+queue.grantConsumeMessages(sqsPayloadLoggerFunction);
+// Add event source
+sqsPayloadLoggerFunction.addEventSource(new event.SqsEventSource(queue));
+// Give permissions to send messages to the DLQ
+dlq.grantSendMessages(sqsPayloadLoggerFunction);
 ```
 
 Commit and push the change. When the deployment completes, view the function in the console to see the updated configuration that specifies the dead-letter queue.
@@ -124,20 +123,22 @@ To use the AWS SAM CLI with this sample, you need the following tools:
 * AWS SAM CLI - [Install the AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html).
 * Docker - [Install Docker community edition](https://hub.docker.com/search/?type=edition&offering=community).
 
-Build your application with the `sam build` command.
+Compile your AWS CDK app and create a AWS CloudFormation template
 
-```bash
-my-application$ sam build -m package.json
+```
+my-application$ cd cdk
+cdk$ npm run build
+cdk$ cdk synth --no-staging > template.yaml
 ```
 
-The AWS SAM CLI installs dependencies that are defined in `package.json`, creates a deployment package, and saves its contents in the `.aws-sam/build` folder.
+Find the logical ID for your Lambda function in `template.yaml`. It will look like *sqsPayloadLoggerFunction12345678*, where *12345678* represents an 8-character unique ID that the AWS CDK generates for all resources. The line right after it should look like `Type: AWS::Lambda::Function`.
 
 Test a single function by invoking it directly with a test event. An event is a JSON document that represents the input that the function receives from the event source. Test events are included in the `events` folder in this project.
 
 Run functions locally and invoke them with the `sam local invoke` command.
 
 ```bash
-my-application$ sam local invoke sqsPayloadLoggerFunction --event events/event-sqs.json
+my-application$ sam local invoke sqsPayloadLoggerFunction87654321 --event events/event-sqs.json
 ```
 
 ## Unit tests
@@ -155,6 +156,6 @@ my-application$ npm run test
 
 ## Resources
 
-For an introduction to the AWS SAM specification, the AWS SAM CLI, and serverless application concepts, see the [AWS SAM Developer Guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/what-is-sam.html).
+For an introduction to the AWS CDK specification, see the [AWS CDK Developer Guide](https://docs.aws.amazon.com/cdk/latest/guide/home.html).
 
 Next, you can use the AWS Serverless Application Repository to deploy ready-to-use apps that go beyond Hello World samples and learn how authors developed their applications. For more information, see the [AWS Serverless Application Repository main page](https://aws.amazon.com/serverless/serverlessrepo/) and the [AWS Serverless Application Repository Developer Guide](https://docs.aws.amazon.com/serverlessrepo/latest/devguide/what-is-serverlessrepo.html).
