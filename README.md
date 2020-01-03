@@ -36,7 +36,7 @@ Update `cdk/lib/cdk-stack.ts` to add a dead-letter queue to your application. In
 ```typescript
 import { Queue } from '@aws-cdk/aws-sqs'
 ...
-const dlq = new Queue(this, 'MyQueue', { });
+const dlq = new Queue(this, 'MyQueue');
 ```
 
 The dead-letter queue is a location for Lambda to send events that could not be processed. It's only used if you invoke your function asynchronously, but it's useful here to show how you can modify your application's resources and function configuration.
@@ -85,20 +85,12 @@ const sqsPayloadLoggerFunction = new lambda.Function(this, "sqsPayloadLoggerFunc
   // Using inline code as a workaround as local assets are not supported yet, see https://github.com/aws/aws-cdk/issues/1312
   //code: lambda.Code.asset("../src/handlers"),
   code: lambda.Code.inline(this.localAsset(path.join(__dirname, "../../src/handlers/sqs-payload-logger.js"))),
-  timeout: cdk.Duration.seconds(25) //Chosen to be less than the default SQS Visibility Timeout of 30 seconds
+  timeout: cdk.Duration.seconds(25), //Chosen to be less than the default SQS Visibility Timeout of 30 seconds
+  events: [
+    new event.SqsEventSource(queue)
+  ],
   deadLetterQueue: dlq
 });
-// Add event source
-new Rule(this, 'SimpleCWEEvent', {
- schedule: Schedule.expression('cron(0 * * * ? *)'),
- targets: [new LambdaFunction(scheduledEventLoggerFunction)],
-});
-// Give Read Permissions to the SQS queue
-queue.grantConsumeMessages(sqsPayloadLoggerFunction);
-// Add event source
-sqsPayloadLoggerFunction.addEventSource(new event.SqsEventSource(queue));
-// Give permissions to send messages to the DLQ
-dlq.grantSendMessages(sqsPayloadLoggerFunction);
 ```
 
 Commit and push the change. When the deployment completes, view the function in the console to see the updated configuration that specifies the dead-letter queue.

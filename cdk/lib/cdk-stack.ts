@@ -2,7 +2,6 @@ import cdk = require('@aws-cdk/core');
 import lambda = require("@aws-cdk/aws-lambda");
 import event = require("@aws-cdk/aws-lambda-event-sources");
 import sqs = require("@aws-cdk/aws-sqs");
-//import iam = require("@aws-cdk/aws-iam");
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -14,14 +13,6 @@ export class CdkStack extends cdk.Stack {
       type: "String",
       description: "App Id"
     });
-
-    // const executionRole = new iam.Role(this, "sqsPayloadLoggerFunctionRole", {
-    //   assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-    //   managedPolicies: [
-    //     iam.ManagedPolicy.fromAwsManagedPolicyName("AWSLambdaBasicExecutionRole"),
-    //     iam.ManagedPolicy.fromAwsManagedPolicyName("AWSLambdaSQSQueueExecutionRole")
-    //   ]
-    // });
 
     // This is an SQS queue with all default configuration properties. To learn more about the available options, see
     // https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-sqs-queues.html
@@ -37,12 +28,10 @@ export class CdkStack extends cdk.Stack {
       //code: lambda.Code.asset("../src/handlers"),
       code: lambda.Code.inline(this.localAsset(path.join(__dirname, "../../src/handlers/sqs-payload-logger.js"))),
       timeout: cdk.Duration.seconds(25), //Chosen to be less than the default SQS Visibility Timeout of 30 seconds
-      //role: executionRole
+      events: [
+        new event.SqsEventSource(queue)
+      ]
     });
-    // Give Read Permissions to the SQS queue
-    //queue.grantConsumeMessages(sqsPayloadLoggerFunction);
-    // Add event source
-    sqsPayloadLoggerFunction.addEventSource(new event.SqsEventSource(queue));
 
   }
 
